@@ -128,6 +128,48 @@ python -m moodful_responder watch     # detect asks, queue drafts (posts nothing
 python -m moodful_responder review     # approve/edit/skip each, then it posts
 ```
 
+(There's also `relay`, which fuses `watch` + `review` into one always-on
+process and pushes each draft to Telegram for one-tap approve/edit/skip — see
+[RESPONDER.md](RESPONDER.md).)
+
+## Daily posts
+
+`moodful_responder` can also post **one original moodful post per day** from a
+curated set of 365 (`moodful_responder/content/posts.json`; regenerate with
+`scripts/assemble_posts.py`). Each goes out as a top-level Bluesky post with a
+clickable `moodful.ca` link, using the same `.env` credentials.
+
+```bash
+python -m moodful_responder post-daily --dry-run   # preview today's post
+python -m moodful_responder post-daily             # post it now
+```
+
+Schedule it with the bundled installer. It adds a single crontab entry that
+`cd`s into the repo (so `.env` auto-loads) and logs to `logs/daily-post.log`:
+
+```bash
+scripts/install_daily_cron.sh                 # random time 6am–midnight (default)
+scripts/install_daily_cron.sh --window=8-22   # random time, 8am–10pm
+scripts/install_daily_cron.sh 09:00           # a fixed time every day instead
+scripts/install_daily_cron.sh --dry-run       # print the crontab line, change nothing
+scripts/install_daily_cron.sh --uninstall     # remove the job
+```
+
+The default fires the job **hourly** across the window; each hour rolls
+`1/(hours left)` so the post lands at a uniformly random hour (plus a
+within-hour minute jitter). The final hour is guaranteed, and if the machine is
+asleep at the chosen hour the next awake hour simply re-rolls. cron uses your
+machine's **local time**, so the job only fires while the machine is awake — for
+guaranteed delivery, run it on an always-on host.
+
+| `post-daily` flag | Meaning |
+|---|---|
+| `--window START-END` | randomize timing across these local hours (e.g. `6-24`); pair with an hourly cron |
+| `--jitter SECS` | max within-hour scatter (default `3300`; `0` = on the hour) |
+| `--start YYYY-MM-DD` | pick the post by calendar date (stateless) instead of a running count |
+| `--dry-run` | show the post without posting |
+| `--force` | post even if one already went out today |
+
 ## References
 
 - [Firehose | Bluesky docs](https://docs.bsky.app/docs/advanced-guides/firehose)
