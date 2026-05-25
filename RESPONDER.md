@@ -67,13 +67,25 @@ No extra dependencies — `bsky.py` uses stdlib `urllib`.
 To post, the `review` step needs an **app password** (not your real password):
 Bluesky → Settings → Privacy and security → App passwords → *Add*.
 
+Put your credentials in a `.env` file — the CLI **auto-loads it** from the
+current directory or the repo root, so there's no `source` step:
+
 ```bash
-export BSKY_IDENTIFIER="your-handle.bsky.social"   # or the bot account's handle
-export BSKY_APP_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+cp example.env .env        # then edit .env and fill in the two required values
 ```
 
-These are read only at `review` time and are never written to disk. (`.env`,
-`*.db`, `*.sqlite` are gitignored.)
+```ini
+# .env  (gitignored — never committed)
+BSKY_IDENTIFIER=your-handle.bsky.social
+BSKY_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
+BSKY_PDS=https://bsky.social        # optional; only for a custom PDS
+MOODFUL_RESPONDER_DB=responder.db   # optional; queue/state file location
+```
+
+Real environment variables still take precedence over `.env`, so you can also
+just `export BSKY_IDENTIFIER=… BSKY_APP_PASSWORD=…` instead. Either way the
+credentials are read only at `review` time. `.env`, `*.db`, and `*.sqlite` are
+gitignored.
 
 ## Usage
 

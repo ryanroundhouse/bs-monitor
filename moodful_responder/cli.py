@@ -17,6 +17,7 @@ from typing import Optional
 
 from . import intent, replies
 from .bsky import DEFAULT_PDS, BskyClient, BskyError
+from .env import load_dotenv
 from .jetstream import JETSTREAM_HOSTS, extract_post, post_events
 from .store import Store
 
@@ -203,7 +204,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Find people asking for a mood/journaling tool on Bluesky "
         "and reply about moodful — with human approval on every post.",
     )
-    p.add_argument("--db", default="responder.db", help="SQLite queue/state file.")
+    p.add_argument("--db", default=os.environ.get("MOODFUL_RESPONDER_DB", "responder.db"),
+                   help="SQLite queue/state file (env: MOODFUL_RESPONDER_DB).")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     w = sub.add_parser("watch", help="stream and queue drafts (posts nothing).")
@@ -214,7 +216,8 @@ def build_parser() -> argparse.ArgumentParser:
     w.set_defaults(func=lambda a: asyncio.run(_watch(a)))
 
     r = sub.add_parser("review", help="approve/edit/skip queued drafts, then post.")
-    r.add_argument("--pds", default=DEFAULT_PDS, help="PDS host (default: bsky.social).")
+    r.add_argument("--pds", default=os.environ.get("BSKY_PDS", DEFAULT_PDS),
+                   help="PDS host (env: BSKY_PDS; default: bsky.social).")
     r.add_argument("--dry-run", action="store_true",
                    help="preview without logging in or posting.")
     r.set_defaults(func=_review)
@@ -225,6 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    load_dotenv()  # auto-load .env (cwd, then repo root) before reading defaults
     args = build_parser().parse_args(argv)
     try:
         args.func(args)
