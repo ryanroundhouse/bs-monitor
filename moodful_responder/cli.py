@@ -12,9 +12,11 @@ import argparse
 import asyncio
 import json
 import os
+import random
 import signal
 import sys
-from datetime import date
+import time
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -497,6 +499,29 @@ def _load_posts(path: str) -> list:
     return posts
 
 
+def _parse_window(spec: str):
+    """Parse a 'START-END' local-hour window (e.g. '6-24'); END is exclusive."""
+    try:
+        a, b = spec.split("-", 1)
+        start, end = int(a), int(b)
+    except (ValueError, AttributeError):
+        raise ValueError(f"invalid --window {spec!r} (use START-END, e.g. 6-24)")
+    if not (0 <= start < end <= 24):
+        raise ValueError(f"invalid --window {spec!r} (need 0 <= start < end <= 24)")
+    return start, end
+
+
+def _should_post_this_hour(hour: int, start: int, end: int, rng=random) -> bool:
+    """Whether *this* hour is the one to post, for an [start, end) hour window.
+
+    Outside the window: never. Inside: post with probability 1/(hours left,
+    incl. now). Over the window that makes each hour equally likely and
+    guarantees a post by the final hour (prob 1)."""
+    if not (start <= hour < end):
+        return False
+    return rng.random() < 1.0 / (end - hour)
+
+
 def _post_daily(args) -> None:
     """Post the next scheduled moodful post. Idempotent per calendar day: if
     one already went out today it does nothing (unless --force)."""
@@ -509,6 +534,34 @@ def _post_daily(args) -> None:
         print(f"already posted today ({today}). {existing['uri'] or ''}".rstrip())
         store.close()
         return
+
+    # Randomized timing (for an hourly cron): fire every hour in a window and
+    # let each hour roll whether it's the one. Robust to the machine sleeping —
+    # the next awake hour re-rolls, and the final hour is guaranteed. Skipped
+    # for --dry-run, which just previews the post.
+    if args.window and not args.dry_run:
+        try:
+            wstart, wend = _parse_window(args.window)
+        except ValueError as exc:
+            print(f"{RED}{exc}{RESET}", file=sys.stderr)
+            store.close()
+            sys.exit(2)
+        hour = datetime.now().hour
+        if not (wstart <= hour < wend):
+            print(f"{DIM}outside posting window {wstart}:00–{wend}:00 "
+                  f"(now {hour:02d}:00) — skipping this run.{RESET}")
+            store.close()
+            return
+        if not args.force and not _should_post_this_hour(hour, wstart, wend):
+            print(f"{DIM}not this hour (rolled 1/{wend - hour}); will reconsider "
+                  f"next hour.{RESET}")
+            store.close()
+            return
+        if args.jitter > 0:
+            delay = random.randint(0, min(args.jitter, 3300))
+            print(f"{DIM}this is the hour — posting in {delay // 60}m "
+                  f"{delay % 60}s.{RESET}", flush=True)
+            time.sleep(delay)
 
     # Two ways to pick today's post:
     #   --start DATE : deterministic by calendar day (stateless — for cron/remote)
@@ -614,6 +667,14 @@ def build_parser() -> argparse.ArgumentParser:
                    metavar="YYYY-MM-DD",
                    help="anchor date for stateless calendar-based selection "
                         "(env: MOODFUL_START_DATE). Best for cron/remote runs.")
+    d.add_argument("--window", default=os.environ.get("MOODFUL_WINDOW"),
+                   metavar="START-END",
+                   help="randomize timing across this local-hour window "
+                        "(e.g. 6-24 = 6am–midnight); pair with an hourly cron. "
+                        "(env: MOODFUL_WINDOW)")
+    d.add_argument("--jitter", type=int, default=3300, metavar="SECS",
+                   help="max seconds to scatter within the chosen hour "
+                        "(default 3300; 0 = on the hour).")
     d.add_argument("--dry-run", action="store_true",
                    help="show the post that would go out, without posting.")
     d.add_argument("--force", action="store_true",
