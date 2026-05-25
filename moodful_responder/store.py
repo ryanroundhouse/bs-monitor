@@ -103,6 +103,14 @@ class Store:
         )
         return cur.fetchall()
 
+    def get_pending(self, queue_id: int) -> Optional[sqlite3.Row]:
+        """Fetch a single still-pending draft by id, or None if it's gone or
+        already resolved (e.g. a stale Telegram tap for an old draft)."""
+        cur = self.conn.execute(
+            "SELECT * FROM queue WHERE id = ? AND status = 'pending'", (queue_id,)
+        )
+        return cur.fetchone()
+
     def mark_sent(self, queue_id: int, did: str, post_uri: str, reply_uri: str) -> None:
         self.conn.execute(
             "UPDATE queue SET status='sent', reply_uri=?, resolved_at=? WHERE id=?",

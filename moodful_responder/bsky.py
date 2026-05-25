@@ -45,6 +45,26 @@ class BskyClient:
         self.did = session["did"]
         self.handle = session.get("handle", identifier)
         self.access_jwt = session["accessJwt"]
+        self.refresh_jwt = session.get("refreshJwt")
+
+    def _refresh_session(self) -> None:
+        """Trade the refresh token for a fresh access token. The relay can run
+        for days; access JWTs expire in well under that."""
+        if not self.refresh_jwt:
+            raise BskyError("session expired and no refresh token is available")
+        session = _post_json(
+            f"{self.pds}/xrpc/com.atproto.server.refreshSession",
+            {}, token=self.refresh_jwt,
+        )
+        self.access_jwt = session["accessJwt"]
+        self.refresh_jwt = session.get("refreshJwt", self.refresh_jwt)
+
+    def _create_record(self, record: dict) -> dict:
+        return _post_json(
+            f"{self.pds}/xrpc/com.atproto.repo.createRecord",
+            {"repo": self.did, "collection": POST_COLLECTION, "record": record},
+            token=self.access_jwt,
+        )
 
     def post_reply(
         self,
@@ -70,9 +90,12 @@ class BskyClient:
         }
         if facets:
             record["facets"] = facets
-        result = _post_json(
-            f"{self.pds}/xrpc/com.atproto.repo.createRecord",
-            {"repo": self.did, "collection": POST_COLLECTION, "record": record},
-            token=self.access_jwt,
-        )
+        try:
+            result = self._create_record(record)
+        except BskyError as exc:
+            # One transparent retry if the access token has expired.
+            if "ExpiredToken" not in str(exc) and "expired" not in str(exc).lower():
+                raise
+            self._refresh_session()
+            result = self._create_record(record)
         return result["uri"]

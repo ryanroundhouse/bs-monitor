@@ -54,7 +54,16 @@ app with no streak pressure"). It does **not**:
 
 Modules: `jetstream.py` (stream), `intent.py` (classify + crisis gate),
 `replies.py` (draft + link facets), `store.py` (queue/dedupe/audit),
-`bsky.py` (XRPC login + post), `cli.py` (commands).
+`bsky.py` (XRPC login + post), `telegram.py` (push + approval bot),
+`cli.py` (commands).
+
+**Don't want to watch a console?** The `relay` command is `watch` + `review`
+fused into one always-on process: it streams the firehose *and* pushes each
+draft to you in Telegram with **Approve / Edit / Skip** buttons. The same
+safety pipeline and the same human-approval rule apply — nothing posts until
+you tap Approve (or reply with edited text). See *Approve from your phone*
+below. The two-phase `watch` + `review` flow still works unchanged as a
+console-only alternative.
 
 ## Setup
 
@@ -80,6 +89,10 @@ BSKY_IDENTIFIER=your-handle.bsky.social
 BSKY_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
 BSKY_PDS=https://bsky.social        # optional; only for a custom PDS
 MOODFUL_RESPONDER_DB=responder.db   # optional; queue/state file location
+
+# Only needed for `relay` (approve from your phone):
+TELEGRAM_BOT_TOKEN=123456789:AA...  # from @BotFather
+TELEGRAM_CHAT_ID=                    # blank → relay prints it for you on first run
 ```
 
 Real environment variables still take precedence over `.env`, so you can also
@@ -114,6 +127,39 @@ python -m moodful_responder stats
 - **s** — skip (logged; the person is *not* marked contacted, but the draft is resolved).
 - **q** — stop reviewing; the rest stay pending.
 
+### Approve from your phone (Telegram)
+
+`relay` replaces the console with a Telegram chat, so you don't have to sit and
+watch anything — you get a push the moment a real ask appears and approve it
+from your phone.
+
+**One-time setup:**
+
+1. In Telegram, message **@BotFather** → `/newbot`, pick a name, copy the token
+   into `TELEGRAM_BOT_TOKEN` in `.env`.
+2. Open your new bot and send it any message (e.g. `/start`) so it can see you.
+3. Run `relay` once with `TELEGRAM_CHAT_ID` blank — it prints your chat id.
+   Paste that into `.env`.
+
+**Run it (leave it running — one process does everything):**
+
+```bash
+python -m moodful_responder relay
+```
+
+For each genuine ask, the bot sends you the original post, a link to it, and the
+drafted reply, with three buttons:
+
+- **✓ Approve** — posts the draft as-is, from your account, as a reply.
+- **✎ Edit** — the bot asks for replacement text; reply with it and that gets
+  posted instead.
+- **⊘ Skip** — drops the draft (logged; the person is *not* marked contacted).
+
+Send `/pending` any time to see how many drafts are waiting. Only the chat id
+you configured can drive the bot — messages from anyone else are ignored. The
+relay keeps your Bluesky session fresh, so it can run for days; `Ctrl-C` stops
+it (it may take a few seconds to finish the current long-poll).
+
 ### Options
 
 | Command | Flag | Default | Meaning |
@@ -123,6 +169,8 @@ python -m moodful_responder stats
 | `watch` | `--min-confidence` | `0.6` | minimum intent score to queue |
 | `review`| `--pds` | `bsky.social` | PDS host for login |
 | `review`| `--dry-run` | off | preview without posting |
+| `relay` | `--endpoint` / `--lang` / `--min-confidence` | (as `watch`) | streaming/classify filters |
+| `relay` | `--pds` | `bsky.social` | PDS host for login |
 | *(all)* | `--db` | `responder.db` | SQLite state file |
 
 ## Tuning the classifier
