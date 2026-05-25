@@ -10,9 +10,12 @@ Two-phase, approval-gated by design:
 
 import argparse
 import asyncio
+import json
 import os
 import signal
 import sys
+from datetime import date
+from pathlib import Path
 from typing import Optional
 
 from . import intent, replies
@@ -28,6 +31,8 @@ YELLOW = "\033[1;33m"
 GREEN = "\033[32m"
 RED = "\033[31m"
 RESET = "\033[0m"
+
+DEFAULT_POSTS = Path(__file__).resolve().parent / "content" / "posts.json"
 
 
 # --------------------------------------------------------------------------- #
@@ -342,7 +347,10 @@ async def _relay_consumer(bot, client, store, stop, status) -> None:
     awaiting_edit: dict = {}  # chat_id -> queue_id awaiting replacement text
     while not stop.is_set():
         try:
-            updates = await asyncio.to_thread(bot.get_updates, offset, 20)
+            # Short long-poll: updates still arrive instantly (the server
+            # returns the moment one lands); the modest window just bounds how
+            # long a Ctrl-C has to wait for an idle poll to return.
+            updates = await asyncio.to_thread(bot.get_updates, offset, 10)
         except TelegramError as exc:
             status(f"Telegram poll error: {exc}; retrying in 5s")
             await asyncio.sleep(5)
@@ -420,9 +428,31 @@ async def _relay(args) -> None:
 
     stop = asyncio.Event()
     loop = asyncio.get_event_loop()
+    tasks = [
+        asyncio.create_task(_relay_producer(args, store, bot, stop, status)),
+        asyncio.create_task(_relay_consumer(bot, client, store, stop, status)),
+    ]
+
+    # Ctrl-C must be responsive: the loops are usually parked inside a network
+    # wait (the firehose recv, a Telegram long-poll), so we cancel the tasks
+    # outright rather than wait for them to notice a flag. A second Ctrl-C
+    # force-quits, in case an in-flight long-poll is still unwinding.
+    interrupts = {"n": 0}
+
+    def _on_signal() -> None:
+        interrupts["n"] += 1
+        if interrupts["n"] == 1:
+            status("shutting down… (press Ctrl-C again to force-quit)")
+            stop.set()
+            for t in tasks:
+                t.cancel()
+        else:
+            status("force-quit.")
+            os._exit(130)
+
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(sig, stop.set)
+            loop.add_signal_handler(sig, _on_signal)
         except NotImplementedError:
             pass
 
@@ -430,11 +460,11 @@ async def _relay(args) -> None:
            f"(lang={args.lang}, min-confidence={args.min_confidence}). "
            f"Approve/edit/skip from Telegram. Ctrl-C to stop.")
     try:
-        await asyncio.gather(
-            _relay_producer(args, store, bot, stop, status),
-            _relay_consumer(bot, client, store, stop, status),
-        )
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        pass  # expected on Ctrl-C
     finally:
+        status("stopped.")
         store.close()
 
 
@@ -448,6 +478,84 @@ def _stats(args) -> None:
     for k in ("pending", "sent", "skipped"):
         print(f"  {k:<9} {s.get(k, 0)}")
     print(f"contacted (lifetime): {s.get('contacted_total', 0)}")
+    store.close()
+
+
+# --------------------------------------------------------------------------- #
+# post-daily — one moodful post per day
+# --------------------------------------------------------------------------- #
+def _load_posts(path: str) -> list:
+    p = Path(path)
+    if not p.is_file():
+        print(f"{RED}posts file not found:{RESET} {p}", file=sys.stderr)
+        sys.exit(1)
+    data = json.loads(p.read_text(encoding="utf-8"))
+    posts = [s.strip() for s in data if isinstance(s, str) and s.strip()]
+    if not posts:
+        print(f"{RED}no posts found in {p}{RESET}", file=sys.stderr)
+        sys.exit(1)
+    return posts
+
+
+def _post_daily(args) -> None:
+    """Post the next scheduled moodful post. Idempotent per calendar day: if
+    one already went out today it does nothing (unless --force)."""
+    posts = _load_posts(args.posts)
+    store = Store(args.db)
+    today = date.today().isoformat()
+
+    existing = store.posted_today(today)
+    if existing and not args.force:
+        print(f"already posted today ({today}). {existing['uri'] or ''}".rstrip())
+        store.close()
+        return
+
+    # Two ways to pick today's post:
+    #   --start DATE : deterministic by calendar day (stateless — for cron/remote)
+    #   default      : sequential by how many we've posted (uses the local db)
+    if args.start:
+        try:
+            start = date.fromisoformat(args.start)
+        except ValueError:
+            print(f"{RED}invalid --start date:{RESET} {args.start} (use YYYY-MM-DD)",
+                  file=sys.stderr)
+            store.close()
+            sys.exit(1)
+        day_num = (date.today() - start).days
+        if day_num < 0:
+            print(f"start date {args.start} is in the future — nothing to post yet.")
+            store.close()
+            return
+        idx, day_label = day_num % len(posts), day_num + 1
+    else:
+        idx, day_label = store.daily_count() % len(posts), store.daily_count() + 1
+
+    text = posts[idx]
+    print(f"{DIM}day {day_label} · post {idx + 1}/{len(posts)}{RESET}")
+    print(f"\n{text}\n")
+
+    if args.dry_run:
+        print(f"{DIM}[dry-run] not posting.{RESET}")
+        store.close()
+        return
+
+    identifier = os.environ.get("BSKY_IDENTIFIER")
+    password = os.environ.get("BSKY_APP_PASSWORD")
+    if not identifier or not password:
+        print(f"{RED}Missing credentials.{RESET} Set BSKY_IDENTIFIER and "
+              f"BSKY_APP_PASSWORD (see .env / RESPONDER.md).", file=sys.stderr)
+        store.close()
+        sys.exit(1)
+    try:
+        client = BskyClient(identifier, password, pds=args.pds)
+        uri = client.post(text, facets=replies.link_facets(text))
+    except BskyError as exc:
+        print(f"{RED}post failed:{RESET} {exc}", file=sys.stderr)
+        store.log("daily_post_error", None, None, str(exc))
+        store.close()
+        sys.exit(1)
+    store.record_daily_post(idx, text, today, uri)
+    print(f"{GREEN}posted.{RESET} {_at_post_url(uri)}")
     store.close()
 
 
@@ -490,6 +598,27 @@ def build_parser() -> argparse.ArgumentParser:
     rl.add_argument("--pds", default=os.environ.get("BSKY_PDS", DEFAULT_PDS),
                     help="PDS host (env: BSKY_PDS; default: bsky.social).")
     rl.set_defaults(func=lambda a: asyncio.run(_relay(a)))
+
+    d = sub.add_parser(
+        "post-daily",
+        help="post the next daily moodful post (idempotent per calendar day).",
+    )
+    d.add_argument(
+        "--posts",
+        default=os.environ.get("MOODFUL_POSTS_FILE", str(DEFAULT_POSTS)),
+        help="JSON array of posts (env: MOODFUL_POSTS_FILE).",
+    )
+    d.add_argument("--pds", default=os.environ.get("BSKY_PDS", DEFAULT_PDS),
+                   help="PDS host (env: BSKY_PDS).")
+    d.add_argument("--start", default=os.environ.get("MOODFUL_START_DATE"),
+                   metavar="YYYY-MM-DD",
+                   help="anchor date for stateless calendar-based selection "
+                        "(env: MOODFUL_START_DATE). Best for cron/remote runs.")
+    d.add_argument("--dry-run", action="store_true",
+                   help="show the post that would go out, without posting.")
+    d.add_argument("--force", action="store_true",
+                   help="post even if one already went out today.")
+    d.set_defaults(func=_post_daily)
 
     s = sub.add_parser("stats", help="show queue + contact counts.")
     s.set_defaults(func=_stats)

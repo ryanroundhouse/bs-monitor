@@ -43,7 +43,16 @@ CREATE TABLE IF NOT EXISTS audit (
     post_uri TEXT,
     detail   TEXT
 );
+CREATE TABLE IF NOT EXISTS daily_posts (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    idx       INTEGER NOT NULL,
+    text      TEXT NOT NULL,
+    post_date TEXT NOT NULL,
+    uri       TEXT,
+    posted_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_queue_status ON queue(status);
+CREATE INDEX IF NOT EXISTS idx_daily_date ON daily_posts(post_date);
 """
 
 
@@ -151,6 +160,27 @@ class Store:
             "SELECT COUNT(*) c FROM contacted"
         ).fetchone()["c"]
         return out
+
+    # --- daily content posting -------------------------------------------
+    def posted_today(self, post_date: str) -> Optional[sqlite3.Row]:
+        cur = self.conn.execute(
+            "SELECT * FROM daily_posts WHERE post_date = ?", (post_date,)
+        )
+        return cur.fetchone()
+
+    def daily_count(self) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) c FROM daily_posts"
+        ).fetchone()["c"]
+
+    def record_daily_post(self, idx: int, text: str, post_date: str, uri: str) -> None:
+        self.conn.execute(
+            """INSERT INTO daily_posts (idx, text, post_date, uri, posted_at)
+               VALUES (?,?,?,?,?)""",
+            (idx, text, post_date, uri, _now()),
+        )
+        self.conn.commit()
+        self.log("daily_post", None, uri, f"idx={idx}")
 
     def close(self) -> None:
         self.conn.close()

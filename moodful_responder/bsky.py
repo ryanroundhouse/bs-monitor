@@ -66,6 +66,33 @@ class BskyClient:
             token=self.access_jwt,
         )
 
+    def post(
+        self,
+        text: str,
+        facets: Optional[List[Dict]] = None,
+        langs: Optional[List[str]] = None,
+    ) -> str:
+        """Create a new top-level post. Returns the new post's AT URI."""
+        record = {
+            "$type": POST_COLLECTION,
+            "text": text,
+            "createdAt": datetime.now(timezone.utc).isoformat().replace(
+                "+00:00", "Z"
+            ),
+            "langs": langs or ["en"],
+        }
+        if facets:
+            record["facets"] = facets
+        try:
+            result = self._create_record(record)
+        except BskyError as exc:
+            # One transparent retry if the access token has expired.
+            if "ExpiredToken" not in str(exc) and "expired" not in str(exc).lower():
+                raise
+            self._refresh_session()
+            result = self._create_record(record)
+        return result["uri"]
+
     def post_reply(
         self,
         text: str,
