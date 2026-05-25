@@ -115,6 +115,19 @@ This is a deliberately small, dependency-light base. Natural next steps:
   or restrict to specific authors with Jetstream's `wantedDids` parameter.
 - **Notifications / alerting** — fan matches out to a webhook, email, or queue.
 
+## moodful_responder
+
+Built on the same firehose: a narrow, **approval-gated** responder that finds
+people *asking* for a mood/journaling tool and drafts a reply about
+[moodful](https://moodful.ca) for a human to approve before it posts. It only
+answers solicited requests, hard-excludes any post with crisis/distress markers,
+dedupes per person, and discloses the sender. See **[RESPONDER.md](RESPONDER.md)**.
+
+```bash
+python -m moodful_responder watch     # detect asks, queue drafts (posts nothing)
+python -m moodful_responder review     # approve/edit/skip each, then it posts
+```
+
 ## References
 
 - [Firehose | Bluesky docs](https://docs.bsky.app/docs/advanced-guides/firehose)

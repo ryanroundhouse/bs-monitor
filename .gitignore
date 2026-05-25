@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 *.ndjson
+*.db
+*.sqlite
+.env
