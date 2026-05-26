@@ -25,6 +25,27 @@ class CrisisGate(unittest.TestCase):
             self.assertTrue(res.is_crisis, f"should flag crisis: {text!r}")
             self.assertFalse(res.should_reply, f"must not reply: {text!r}")
 
+    def test_contextual_crisis_terms_require_negative_personal_sentiment(self):
+        neutral_or_third_party = [
+            "Here's the full breakdown:",
+            "the bluejays offense is worthless",
+            "Evans went for a Suicide Dive, but Penta moved",
+        ]
+        for text in neutral_or_third_party:
+            res = intent.evaluate(text)
+            self.assertFalse(res.is_crisis, f"neutral/third-party usage should not flag: {text!r}")
+
+    def test_contextual_crisis_terms_still_flag_personal_distress(self):
+        distress_posts = [
+            "i feel completely worthless today",
+            "i'm having a breakdown and need help",
+            "had a panic attack while writing this today",
+        ]
+        for text in distress_posts:
+            res = intent.evaluate(text)
+            self.assertTrue(res.is_crisis, f"personal distress should flag: {text!r}")
+            self.assertFalse(res.should_reply, f"must not reply: {text!r}")
+
 
 class GenuineAsks(unittest.TestCase):
     """Clear recommendation requests should be detected."""

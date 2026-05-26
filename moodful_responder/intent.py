@@ -17,18 +17,40 @@ from dataclasses import dataclass, field
 from typing import List
 
 
-# --- Crisis / acute-distress markers: if ANY appear, we drop the post. -------
-# Broad on purpose. Better to skip a borderline post than to market into a
-# vulnerable moment.
-CRISIS_TERMS = [
-    "suicide", "suicidal", "kill myself", "killing myself", "end my life",
+# --- Crisis / acute-distress markers ---------------------------------------
+# Direct self-harm / acute-risk phrases remain a hard stop. Broader distress
+# words are contextual: they only trip the crisis gate when the post appears to
+# be about the author's negative personal state. This keeps neutral uses like
+# "full breakdown" or "the offense is worthless" out of the audit stream while
+# preserving the safety rail for first-person distress.
+HARD_CRISIS_TERMS = [
+    "suicidal", "kill myself", "killing myself", "end my life",
     "end it all", "want to die", "wanna die", "wanting to die", "want to be dead",
     "better off dead",
     "self harm", "self-harm", "selfharm", "cut myself", "cutting myself",
     "hurt myself", "harm myself", "no reason to live", "don't want to be here",
     "dont want to be here", "can't go on", "cant go on", "give up on life",
-    "hopeless", "worthless", "panic attack", "breakdown", "crisis line",
-    "hotline", "in crisis", "relapse", "relapsing",
+    "crisis line", "hotline", "in crisis",
+]
+
+CONTEXTUAL_CRISIS_TERMS = [
+    "suicide", "hopeless", "worthless", "panic attack", "breakdown",
+    "relapse", "relapsing",
+]
+
+# Backwards-compatible aggregate for callers/tests that inspect the term list.
+CRISIS_TERMS = HARD_CRISIS_TERMS + CONTEXTUAL_CRISIS_TERMS
+
+PERSONAL_STATE_PATTERNS = [
+    r"\b(i|i'm|im|me|my|myself|mine)\b",
+    r"\b(had|having|feel|feeling|felt|been|being|am|was)\b",
+    r"\bneed help\b",
+]
+
+NEGATIVE_SENTIMENT_TERMS = [
+    "awful", "bad", "can't", "cant", "crying", "depressed", "done", "exhausted",
+    "hate", "help", "hurting", "miserable", "overwhelmed", "sad", "scared",
+    "spiraling", "struggling", "terrible", "tired", "ugh", "worse", "worst",
 ]
 
 # --- Topic: the post is about mood / journaling / feeling tracking. ----------
@@ -69,6 +91,27 @@ def _contains_any(haystack: str, needles: List[str]) -> List[str]:
     return [n for n in needles if n in haystack]
 
 
+def _has_personal_negative_sentiment(norm: str) -> bool:
+    """Heuristic sentiment/context check for broad crisis words.
+
+    We intentionally avoid adding an ML dependency to the always-on relay. A
+    contextual crisis hit must look personal (first-person or personal-state
+    language) and negative. The matched crisis word itself counts as the negative
+    signal; this helper mainly filters out neutral/third-party uses.
+    """
+    return any(re.search(pat, norm) for pat in PERSONAL_STATE_PATTERNS) or any(
+        term in norm for term in NEGATIVE_SENTIMENT_TERMS
+    )
+
+
+def _crisis_hits(norm: str) -> List[str]:
+    hits = _contains_any(norm, HARD_CRISIS_TERMS)
+    contextual_hits = _contains_any(norm, CONTEXTUAL_CRISIS_TERMS)
+    if contextual_hits and _has_personal_negative_sentiment(norm):
+        hits.extend(contextual_hits)
+    return hits
+
+
 @dataclass
 class IntentResult:
     is_ask: bool = False
@@ -88,7 +131,7 @@ def evaluate(text: str) -> IntentResult:
     """Classify a single post's text."""
     norm = re.sub(r"\s+", " ", text.lower()).strip()
 
-    crisis_hits = _contains_any(norm, CRISIS_TERMS)
+    crisis_hits = _crisis_hits(norm)
     topic_hits = _contains_any(norm, TOPIC_PHRASES)
     seeking_hits = _contains_any(norm, SEEKING_PHRASES)
     high_conf = _contains_any(norm, HIGH_CONFIDENCE_PHRASES)
