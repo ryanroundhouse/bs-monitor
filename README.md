@@ -137,7 +137,10 @@ process and pushes each draft to Telegram for one-tap approve/edit/skip — see
 `moodful_responder` can also post **one original moodful post per day** from a
 curated set of 365 (`moodful_responder/content/posts.json`; regenerate with
 `scripts/assemble_posts.py`). Each goes out as a top-level Bluesky post with a
-clickable `moodful.ca` link, using the same `.env` credentials.
+clickable `moodful.ca` link and a small rotating set of relevant hashtags (for
+example `#moodtracking`, `#journaling`, `#selfcare`, `#mentalhealth`) to improve
+discovery without making the post feel spammy. It uses the same `.env`
+credentials.
 
 ```bash
 python -m moodful_responder post-daily --dry-run   # preview today's post
@@ -169,6 +172,27 @@ guaranteed delivery, run it on an always-on host.
 | `--start YYYY-MM-DD` | pick the post by calendar date (stateless) instead of a running count |
 | `--dry-run` | show the post without posting |
 | `--force` | post even if one already went out today |
+
+## Daily mood engagement
+
+There is also a daily engagement command that searches Bluesky for public posts
+about moods and likes one safe candidate per calendar day. It skips your own
+posts, posts mentioning moodful, crisis/distress content, and anything already
+recorded in the local database.
+
+```bash
+python -m moodful_responder like-mood-post --dry-run   # preview a candidate
+python -m moodful_responder like-mood-post             # like one safe match
+```
+
+Useful flags:
+
+| `like-mood-post` flag | Meaning |
+|---|---|
+| `--query QUERY` | add/override a search query; repeat for multiple queries |
+| `--limit N` | results to inspect per query (default `20`) |
+| `--dry-run` | show the candidate without liking |
+| `--force` | attempt a like even if one was already recorded today |
 
 ## References
 

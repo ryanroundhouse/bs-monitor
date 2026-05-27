@@ -11,14 +11,31 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from urllib.error import HTTPError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 DEFAULT_PDS = "https://bsky.social"
 POST_COLLECTION = "app.bsky.feed.post"
+LIKE_COLLECTION = "app.bsky.feed.like"
 
 
 class BskyError(RuntimeError):
     pass
+
+
+def _get_json(url: str, params: Optional[dict] = None, token: Optional[str] = None) -> dict:
+    if params:
+        url = f"{url}?{urlencode(params)}"
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = Request(url, headers=headers, method="GET")
+    try:
+        with urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")
+        raise BskyError(f"{exc.code} {exc.reason}: {detail}") from exc
 
 
 def _post_json(url: str, body: dict, token: Optional[str] = None) -> dict:
@@ -59,10 +76,10 @@ class BskyClient:
         self.access_jwt = session["accessJwt"]
         self.refresh_jwt = session.get("refreshJwt", self.refresh_jwt)
 
-    def _create_record(self, record: dict) -> dict:
+    def _create_record(self, collection: str, record: dict) -> dict:
         return _post_json(
             f"{self.pds}/xrpc/com.atproto.repo.createRecord",
-            {"repo": self.did, "collection": POST_COLLECTION, "record": record},
+            {"repo": self.did, "collection": collection, "record": record},
             token=self.access_jwt,
         )
 
@@ -84,13 +101,13 @@ class BskyClient:
         if facets:
             record["facets"] = facets
         try:
-            result = self._create_record(record)
+            result = self._create_record(POST_COLLECTION, record)
         except BskyError as exc:
             # One transparent retry if the access token has expired.
             if "ExpiredToken" not in str(exc) and "expired" not in str(exc).lower():
                 raise
             self._refresh_session()
-            result = self._create_record(record)
+            result = self._create_record(POST_COLLECTION, record)
         return result["uri"]
 
     def post_reply(
@@ -118,11 +135,47 @@ class BskyClient:
         if facets:
             record["facets"] = facets
         try:
-            result = self._create_record(record)
+            result = self._create_record(POST_COLLECTION, record)
         except BskyError as exc:
             # One transparent retry if the access token has expired.
             if "ExpiredToken" not in str(exc) and "expired" not in str(exc).lower():
                 raise
             self._refresh_session()
-            result = self._create_record(record)
+            result = self._create_record(POST_COLLECTION, record)
         return result["uri"]
+
+    def search_posts(self, query: str, limit: int = 10, sort: str = "latest") -> List[Dict]:
+        """Search Bluesky posts using the authenticated app.bsky.feed.searchPosts endpoint."""
+        try:
+            result = _get_json(
+                f"{self.pds}/xrpc/app.bsky.feed.searchPosts",
+                {"q": query, "limit": max(1, min(limit, 100)), "sort": sort},
+                token=self.access_jwt,
+            )
+        except BskyError as exc:
+            if "ExpiredToken" not in str(exc) and "expired" not in str(exc).lower():
+                raise
+            self._refresh_session()
+            result = _get_json(
+                f"{self.pds}/xrpc/app.bsky.feed.searchPosts",
+                {"q": query, "limit": max(1, min(limit, 100)), "sort": sort},
+                token=self.access_jwt,
+            )
+        return result.get("posts", [])
+
+    def like(self, uri: str, cid: str) -> str:
+        """Like a post. Returns the AT URI of the like record."""
+        record = {
+            "$type": LIKE_COLLECTION,
+            "subject": {"uri": uri, "cid": cid},
+            "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+        try:
+            result = self._create_record(LIKE_COLLECTION, record)
+        except BskyError as exc:
+            if "ExpiredToken" not in str(exc) and "expired" not in str(exc).lower():
+                raise
+            self._refresh_session()
+            result = self._create_record(LIKE_COLLECTION, record)
+        return result["uri"]
+

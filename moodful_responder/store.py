@@ -51,8 +51,21 @@ CREATE TABLE IF NOT EXISTS daily_posts (
     uri       TEXT,
     posted_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS daily_likes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    like_date  TEXT NOT NULL,
+    post_uri   TEXT NOT NULL,
+    cid        TEXT,
+    author_did TEXT,
+    text       TEXT,
+    like_uri   TEXT,
+    query      TEXT,
+    liked_at   TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_queue_status ON queue(status);
 CREATE INDEX IF NOT EXISTS idx_daily_date ON daily_posts(post_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_likes_date ON daily_likes(like_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_likes_post ON daily_likes(post_uri);
 """
 
 
@@ -181,6 +194,32 @@ class Store:
         )
         self.conn.commit()
         self.log("daily_post", None, uri, f"idx={idx}")
+
+    # --- daily engagement likes -------------------------------------------
+    def liked_today(self, like_date: str) -> Optional[sqlite3.Row]:
+        cur = self.conn.execute(
+            "SELECT * FROM daily_likes WHERE like_date = ?", (like_date,)
+        )
+        return cur.fetchone()
+
+    def already_liked_post(self, post_uri: str) -> bool:
+        cur = self.conn.execute(
+            "SELECT 1 FROM daily_likes WHERE post_uri = ?", (post_uri,)
+        )
+        return cur.fetchone() is not None
+
+    def record_daily_like(
+        self, like_date: str, post_uri: str, cid: str, author_did: str,
+        text: str, like_uri: str, query: str
+    ) -> None:
+        self.conn.execute(
+            """INSERT INTO daily_likes
+               (like_date, post_uri, cid, author_did, text, like_uri, query, liked_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (like_date, post_uri, cid, author_did, text, like_uri, query, _now()),
+        )
+        self.conn.commit()
+        self.log("daily_like", author_did, post_uri, f"query={query}; like={like_uri}")
 
     def close(self) -> None:
         self.conn.close()

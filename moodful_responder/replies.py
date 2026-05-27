@@ -64,6 +64,14 @@ def _has_burnout_context(text: str) -> bool:
     return any(m in low for m in BURNOUT_MARKERS)
 
 
+def _byte_span(text: str, start: int, end: int) -> Dict[str, int]:
+    """Return an AT Protocol facet byte span for character offsets."""
+    return {
+        "byteStart": len(text[:start].encode("utf-8")),
+        "byteEnd": len(text[:end].encode("utf-8")),
+    }
+
+
 def link_facets(text: str, link: str = LINK, uri: str = LINK_URI) -> List[Dict]:
     """Build AT Protocol richtext facets so the link is clickable.
 
@@ -72,16 +80,43 @@ def link_facets(text: str, link: str = LINK, uri: str = LINK_URI) -> List[Dict]:
     idx = text.find(link)
     if idx < 0:
         return []
-    byte_start = len(text[:idx].encode("utf-8"))
-    byte_end = byte_start + len(link.encode("utf-8"))
     return [
         {
-            "index": {"byteStart": byte_start, "byteEnd": byte_end},
+            "index": _byte_span(text, idx, idx + len(link)),
             "features": [
                 {"$type": "app.bsky.richtext.facet#link", "uri": uri}
             ],
         }
     ]
+
+
+def hashtag_facets(text: str) -> List[Dict]:
+    """Build facets for #hashtags, preserving Bluesky's searchable tag value.
+
+    The feature tag excludes the leading '#', while the byte span includes it.
+    """
+    facets: List[Dict] = []
+    i = 0
+    while i < len(text):
+        if text[i] != "#" or (i > 0 and (text[i - 1].isalnum() or text[i - 1] == "_")):
+            i += 1
+            continue
+        j = i + 1
+        while j < len(text) and (text[j].isalnum() or text[j] == "_"):
+            j += 1
+        tag = text[i + 1:j]
+        if tag:
+            facets.append({
+                "index": _byte_span(text, i, j),
+                "features": [{"$type": "app.bsky.richtext.facet#tag", "tag": tag}],
+            })
+        i = max(j, i + 1)
+    return facets
+
+
+def richtext_facets(text: str) -> List[Dict]:
+    """Return all richtext facets used by moodful posts."""
+    return link_facets(text) + hashtag_facets(text)
 
 
 def draft_reply(post_text: str, rng: Optional[random.Random] = None) -> str:

@@ -36,6 +36,21 @@ RESET = "\033[0m"
 
 DEFAULT_POSTS = Path(__file__).resolve().parent / "content" / "posts.json"
 
+DAILY_HASHTAGS = {
+    "base": ["#moodtracking", "#journaling", "#selfcare", "#mentalhealth"],
+    "privacy": ["#privacy", "#digitalwellbeing"],
+    "breath": ["#breathwork", "#mindfulness"],
+    "habit": ["#habits", "#dailyreflection"],
+    "sleep": ["#sleep", "#wellbeing"],
+}
+MOOD_SEARCH_QUERIES = [
+    '"mood journal" -moodful',
+    '"mood tracking" -moodful',
+    '"feeling a bit" mood -moodful',
+    '"how are you feeling" mood -moodful',
+    '"daily reflection" mood -moodful',
+]
+
 
 # --------------------------------------------------------------------------- #
 # shared safety pipeline
@@ -522,6 +537,44 @@ def _should_post_this_hour(hour: int, start: int, end: int, rng=random) -> bool:
     return rng.random() < 1.0 / (end - hour)
 
 
+def _select_daily_hashtags(text: str, day_label: int, max_tags: int = 3) -> list:
+    """Pick a small, rotating hashtag set for discoverability without spamminess."""
+    low = text.lower()
+    candidates = list(DAILY_HASHTAGS["base"])
+    if any(w in low for w in ("private", "privacy", "sell", "train")):
+        candidates += DAILY_HASHTAGS["privacy"]
+    if any(w in low for w in ("breath", "breathing", "stillness", "pause")):
+        candidates += DAILY_HASHTAGS["breath"]
+    if any(w in low for w in ("habit", "ritual", "daily", "check-in", "check in")):
+        candidates += DAILY_HASHTAGS["habit"]
+    if "sleep" in low:
+        candidates += DAILY_HASHTAGS["sleep"]
+
+    # De-dupe while preserving order, then rotate deterministically by post day
+    # so the account does not use the exact same tags every day.
+    seen = set()
+    unique = [t for t in candidates if not (t.lower() in seen or seen.add(t.lower()))]
+    rng = random.Random(day_label)
+    rng.shuffle(unique)
+    return unique[:max_tags]
+
+
+def _append_daily_hashtags(text: str, day_label: int, max_len: int = replies.MAX_GRAPHEMES) -> str:
+    """Append up to three engagement hashtags while respecting Bluesky's limit."""
+    tags = _select_daily_hashtags(text, day_label)
+    if not tags or any("#" in part for part in text.split()):
+        return text
+    out = text
+    chosen = []
+    for tag in tags:
+        candidate_tags = chosen + [tag]
+        candidate = f"{text.rstrip()}\n\n{' '.join(candidate_tags)}"
+        if len(candidate) <= max_len:
+            out = candidate
+            chosen = candidate_tags
+    return out
+
+
 def _post_daily(args) -> None:
     """Post the next scheduled moodful post. Idempotent per calendar day: if
     one already went out today it does nothing (unless --force)."""
@@ -583,7 +636,7 @@ def _post_daily(args) -> None:
     else:
         idx, day_label = store.daily_count() % len(posts), store.daily_count() + 1
 
-    text = posts[idx]
+    text = _append_daily_hashtags(posts[idx], day_label)
     print(f"{DIM}day {day_label} · post {idx + 1}/{len(posts)}{RESET}")
     print(f"\n{text}\n")
 
@@ -601,7 +654,7 @@ def _post_daily(args) -> None:
         sys.exit(1)
     try:
         client = BskyClient(identifier, password, pds=args.pds)
-        uri = client.post(text, facets=replies.link_facets(text))
+        uri = client.post(text, facets=replies.richtext_facets(text))
     except BskyError as exc:
         print(f"{RED}post failed:{RESET} {exc}", file=sys.stderr)
         store.log("daily_post_error", None, None, str(exc))
@@ -609,6 +662,85 @@ def _post_daily(args) -> None:
         sys.exit(1)
     store.record_daily_post(idx, text, today, uri)
     print(f"{GREEN}posted.{RESET} {_at_post_url(uri)}")
+    store.close()
+
+
+def _search_post_text(post: dict) -> str:
+    record = post.get("record") or {}
+    return str(record.get("text") or post.get("text") or "")
+
+
+def _is_safe_mood_like_candidate(post: dict, client: BskyClient, store: Store) -> bool:
+    uri = post.get("uri")
+    cid = post.get("cid")
+    author = post.get("author") or {}
+    text = _search_post_text(post)
+    if not uri or not cid or not text:
+        return False
+    if author.get("did") == client.did:
+        return False
+    if store.already_liked_post(uri):
+        return False
+    low = text.lower()
+    if "moodful" in low or "moodful.ca" in low:
+        return False
+    # Avoid liking crisis/distress content from the brand account.
+    res = intent.evaluate(text)
+    if res.is_crisis:
+        return False
+    return True
+
+
+def _like_mood_post(args) -> None:
+    """Once per day, find a public post about moods and like one safe candidate."""
+    store = Store(args.db)
+    today = date.today().isoformat()
+    existing = store.liked_today(today)
+    if existing and not args.force:
+        print(f"already liked a mood post today ({today}). {existing['post_uri']}")
+        store.close()
+        return
+
+    identifier = os.environ.get("BSKY_IDENTIFIER")
+    password = os.environ.get("BSKY_APP_PASSWORD")
+    if not identifier or not password:
+        print(f"{RED}Missing credentials.{RESET} Set BSKY_IDENTIFIER and "
+              f"BSKY_APP_PASSWORD (see .env / RESPONDER.md).", file=sys.stderr)
+        store.close()
+        sys.exit(1)
+
+    try:
+        client = BskyClient(identifier, password, pds=args.pds)
+        queries = list(args.query or MOOD_SEARCH_QUERIES)
+        random.shuffle(queries)
+        for query in queries:
+            posts = client.search_posts(query, limit=args.limit, sort="latest")
+            random.shuffle(posts)
+            for post in posts:
+                if not _is_safe_mood_like_candidate(post, client, store):
+                    continue
+                uri, cid = post["uri"], post["cid"]
+                author_did = (post.get("author") or {}).get("did", "")
+                text = _search_post_text(post).strip()
+                print(f"candidate from {query!r}: {_at_post_url(uri)}")
+                print(text[:280])
+                if args.dry_run:
+                    print(f"{DIM}[dry-run] not liking.{RESET}")
+                    store.close()
+                    return
+                like_uri = client.like(uri, cid)
+                store.record_daily_like(today, uri, cid, author_did, text, like_uri, query)
+                print(f"{GREEN}liked.{RESET} {_at_post_url(uri)}")
+                store.close()
+                return
+    except BskyError as exc:
+        print(f"{RED}like task failed:{RESET} {exc}", file=sys.stderr)
+        store.log("daily_like_error", None, None, str(exc))
+        store.close()
+        sys.exit(1)
+
+    print("no safe mood post found to like today.")
+    store.log("daily_like_none", None, None, "no safe candidate")
     store.close()
 
 
@@ -680,6 +812,22 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--force", action="store_true",
                    help="post even if one already went out today.")
     d.set_defaults(func=_post_daily)
+
+    l = sub.add_parser(
+        "like-mood-post",
+        help="once per day, find a public mood-related post and like one safe candidate.",
+    )
+    l.add_argument("--pds", default=os.environ.get("BSKY_PDS", DEFAULT_PDS),
+                   help="PDS host (env: BSKY_PDS).")
+    l.add_argument("--query", action="append",
+                   help="search query to try; may be repeated. Defaults to curated mood queries.")
+    l.add_argument("--limit", type=int, default=20,
+                   help="search results to inspect per query (default 20).")
+    l.add_argument("--dry-run", action="store_true",
+                   help="show the candidate without liking it.")
+    l.add_argument("--force", action="store_true",
+                   help="like even if one was already recorded today.")
+    l.set_defaults(func=_like_mood_post)
 
     s = sub.add_parser("stats", help="show queue + contact counts.")
     s.set_defaults(func=_stats)

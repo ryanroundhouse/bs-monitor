@@ -56,5 +56,24 @@ class ParseWindow(unittest.TestCase):
                 cli._parse_window(bad)
 
 
+class DailyHashtags(unittest.TestCase):
+    def test_appends_discoverability_hashtags(self):
+        text = "A quiet daily check-in can be enough. moodful.ca"
+        out = cli._append_daily_hashtags(text, day_label=1)
+        self.assertTrue(out.startswith(text))
+        self.assertIn("#", out)
+        self.assertLessEqual(len(out), cli.replies.MAX_GRAPHEMES)
+
+    def test_respects_post_limit(self):
+        text = "x" * cli.replies.MAX_GRAPHEMES
+        self.assertEqual(cli._append_daily_hashtags(text, day_label=1), text)
+
+    def test_tag_facets_are_emitted(self):
+        text = "moodful.ca\n\n#moodtracking #journaling"
+        facets = cli.replies.richtext_facets(text)
+        tags = [f["features"][0].get("tag") for f in facets if f["features"][0]["$type"].endswith("#tag")]
+        self.assertEqual(tags, ["moodtracking", "journaling"])
+
+
 if __name__ == "__main__":
     unittest.main()
