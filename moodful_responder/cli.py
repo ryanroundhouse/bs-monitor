@@ -438,10 +438,10 @@ async def _relay(args) -> None:
             f"I'll send drafts here for you to approve, edit, or skip."
         )
     except TelegramError as exc:
-        print(f"{RED}Couldn't reach Telegram:{RESET} {exc}\nCheck TELEGRAM_BOT_TOKEN "
-              f"and TELEGRAM_CHAT_ID.", file=sys.stderr)
-        store.close()
-        sys.exit(1)
+        status(
+            f"startup Telegram notification failed ({exc}); continuing so "
+            "transient Telegram outages don't restart the relay"
+        )
 
     stop = asyncio.Event()
     loop = asyncio.get_event_loop()

@@ -6,9 +6,10 @@ The HTTP methods are not exercised here.
 """
 
 import unittest
+from unittest.mock import patch
 
 from moodful_responder import telegram
-from moodful_responder.telegram import TelegramBot
+from moodful_responder.telegram import TelegramBot, TelegramError
 
 
 class CallbackData(unittest.TestCase):
@@ -62,6 +63,15 @@ class Formatting(unittest.TestCase):
         msg = telegram.format_draft(long_ask, "draft", "url", 0.7)
         self.assertIn("…", msg)
         self.assertLess(len(msg), 5000)
+
+
+class NetworkErrors(unittest.TestCase):
+    def test_socket_timeout_is_wrapped_as_telegram_error(self):
+        bot = TelegramBot("token", "12345")
+
+        with patch("moodful_responder.telegram.urlopen", side_effect=TimeoutError("timed out")):
+            with self.assertRaisesRegex(TelegramError, "sendMessage: timed out"):
+                bot.send_message("hello")
 
 
 if __name__ == "__main__":

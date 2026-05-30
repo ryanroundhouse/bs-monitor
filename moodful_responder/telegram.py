@@ -101,6 +101,8 @@ class TelegramBot:
             raise TelegramError(f"{method}: {exc.code} {exc.reason}: {detail}") from exc
         except URLError as exc:
             raise TelegramError(f"{method}: {exc.reason}") from exc
+        except TimeoutError as exc:
+            raise TelegramError(f"{method}: {exc}") from exc
         if not payload.get("ok"):
             raise TelegramError(f"{method}: {payload.get('description', payload)}")
         return payload["result"]

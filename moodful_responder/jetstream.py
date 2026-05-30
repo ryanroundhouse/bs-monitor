@@ -93,7 +93,7 @@ async def post_events(
                     yield event
         except asyncio.TimeoutError:
             continue
-        except (websockets.ConnectionClosed, OSError) as exc:
+        except (websockets.WebSocketException, OSError) as exc:
             if stop.is_set():
                 break
             if cursor is not None:
