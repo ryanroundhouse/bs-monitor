@@ -38,9 +38,15 @@ def _get_json(url: str, params: Optional[dict] = None, token: Optional[str] = No
         raise BskyError(f"{exc.code} {exc.reason}: {detail}") from exc
 
 
-def _post_json(url: str, body: dict, token: Optional[str] = None) -> dict:
-    data = json.dumps(body).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
+def _post_json(url: str, body: Optional[dict], token: Optional[str] = None) -> dict:
+    headers = {}
+    if body is None:
+        # refreshSession (and other bodyless XRPC procedures) reject any body
+        # with "A request body was provided when none was expected".
+        data = b""
+    else:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req = Request(url, data=data, headers=headers, method="POST")
@@ -71,7 +77,7 @@ class BskyClient:
             raise BskyError("session expired and no refresh token is available")
         session = _post_json(
             f"{self.pds}/xrpc/com.atproto.server.refreshSession",
-            {}, token=self.refresh_jwt,
+            None, token=self.refresh_jwt,
         )
         self.access_jwt = session["accessJwt"]
         self.refresh_jwt = session.get("refreshJwt", self.refresh_jwt)
