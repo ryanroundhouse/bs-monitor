@@ -47,7 +47,7 @@ event ──▶ kind == "commit"
 
 ## Setup
 
-Requires Python 3.8+.
+Requires Python 3.8+ for the stream monitor; the Discord approval relay is deployed and tested on Python 3.11.
 
 ```bash
 python3 -m venv .venv
@@ -129,8 +129,12 @@ python -m moodful_responder review     # approve/edit/skip each, then it posts
 ```
 
 (There's also `relay`, which fuses `watch` + `review` into one always-on
-process and pushes each draft to Telegram for one-tap approve/edit/skip — see
-[RESPONDER.md](RESPONDER.md).)
+process. The deployed relay uses a dedicated Discord thread with **Approve / Edit /
+Skip buttons** and a single authorized reviewer. Edit opens a prefilled modal and
+saves only; a separate Approve is required to post. Explicit text commands remain
+as fallback. See [DISCORD_RELAY.md](DISCORD_RELAY.md) for controls, configuration,
+and rollback.
+Legacy Telegram mode remains available only for explicit rollback.)
 
 ## Daily posts
 

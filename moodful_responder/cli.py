@@ -383,6 +383,13 @@ async def _relay_consumer(bot, client, store, stop, status) -> None:
 
 
 async def _relay(args) -> None:
+    transport = os.environ.get("RELAY_TRANSPORT", "telegram")
+    if transport not in ("telegram", "discord"):
+        raise ValueError("RELAY_TRANSPORT must be discord or telegram")
+    if transport == "discord":
+        from .discord import run
+        await run(args)
+        return
     store = Store(args.db)
 
     def status(msg: str) -> None:
